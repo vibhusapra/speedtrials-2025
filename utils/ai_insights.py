@@ -1,24 +1,26 @@
-import os
 from typing import Dict, Any, Optional
-from anthropic import Anthropic
+import os
 from dotenv import load_dotenv
+from openai import OpenAI
 
 load_dotenv()
 
-class ClaudeInsights:
+class AIInsights:
     def __init__(self):
-        api_key = os.getenv('ANTHROPIC_API_KEY')
-        if api_key and api_key != 'your_api_key_here':
-            self.client = Anthropic(api_key=api_key)
+        try:
+            # Initialize OpenAI client - it automatically uses OPENAI_API_KEY from environment
+            self.client = OpenAI()
             self.enabled = True
-        else:
+            print("OpenAI client initialized successfully")
+        except Exception as e:
+            print(f"Error initializing OpenAI client: {e}")
             self.client = None
             self.enabled = False
     
     def explain_violation(self, violation_data: Dict[str, Any]) -> str:
         """Get plain English explanation of a violation"""
         if not self.enabled:
-            return "Claude API not configured. Add your ANTHROPIC_API_KEY to .env file for AI insights."
+            return "OpenAI API not configured. Add your OPENAI_API_KEY to .env file for AI insights."
         
         try:
             violation_code = violation_data.get('VIOLATION_CODE', 'Unknown')
@@ -42,14 +44,17 @@ class ClaudeInsights:
             Keep the response concise and avoid technical jargon.
             """
             
-            response = self.client.messages.create(
-                model="claude-3-haiku-20240307",
+            response = self.client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[
+                    {"role": "developer", "content": "You are a helpful assistant explaining water quality issues to residents in simple, clear language."},
+                    {"role": "user", "content": prompt}
+                ],
                 max_tokens=300,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}]
+                temperature=0
             )
             
-            return response.content[0].text
+            return response.choices[0].message.content
             
         except Exception as e:
             return f"Error getting AI insight: {str(e)}"
@@ -57,7 +62,7 @@ class ClaudeInsights:
     def analyze_system_health(self, system_data: Dict[str, Any]) -> str:
         """Analyze overall health of a water system"""
         if not self.enabled:
-            return "Claude API not configured. Add your ANTHROPIC_API_KEY to .env file for AI insights."
+            return "OpenAI API not configured. Add your OPENAI_API_KEY to .env file for AI insights."
         
         try:
             system = system_data.get('system', {})
@@ -90,14 +95,17 @@ class ClaudeInsights:
             Be direct and helpful. Use simple language.
             """
             
-            response = self.client.messages.create(
-                model="claude-3-haiku-20240307",
+            response = self.client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[
+                    {"role": "developer", "content": "You are a water quality expert providing clear assessments for public water systems."},
+                    {"role": "user", "content": prompt}
+                ],
                 max_tokens=400,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}]
+                temperature=0
             )
             
-            return response.content[0].text
+            return response.choices[0].message.content
             
         except Exception as e:
             return f"Error getting AI insight: {str(e)}"
@@ -105,7 +113,7 @@ class ClaudeInsights:
     def interpret_lead_copper_results(self, test_results: list) -> str:
         """Interpret lead and copper test results"""
         if not self.enabled:
-            return "Claude API not configured. Add your ANTHROPIC_API_KEY to .env file for AI insights."
+            return "OpenAI API not configured. Add your OPENAI_API_KEY to .env file for AI insights."
         
         try:
             # EPA action levels
@@ -136,14 +144,17 @@ class ClaudeInsights:
             Use plain language that non-experts can understand.
             """
             
-            response = self.client.messages.create(
-                model="claude-3-haiku-20240307",
+            response = self.client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[
+                    {"role": "developer", "content": "You are a water quality expert explaining lead and copper test results to residents."},
+                    {"role": "user", "content": prompt}
+                ],
                 max_tokens=300,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}]
+                temperature=0
             )
             
-            return response.content[0].text
+            return response.choices[0].message.content
             
         except Exception as e:
             return f"Error getting AI insight: {str(e)}"
@@ -151,31 +162,74 @@ class ClaudeInsights:
     def chat_query(self, question: str, context: Optional[Dict[str, Any]] = None) -> str:
         """Answer general questions about water quality"""
         if not self.enabled:
-            return "Claude API not configured. Add your ANTHROPIC_API_KEY to .env file for AI insights."
+            return "OpenAI API not configured. Add your OPENAI_API_KEY to .env file for AI insights."
         
         try:
             context_str = ""
             if context:
                 context_str = f"\nContext: {context}"
             
-            prompt = f"""
-            You are a helpful assistant for Georgia residents concerned about their drinking water quality.
+            messages = [
+                {"role": "developer", "content": "You are a helpful assistant for Georgia residents concerned about their drinking water quality. Provide accurate, helpful responses in plain language."},
+                {"role": "user", "content": f"{question}{context_str}"}
+            ]
             
-            User Question: {question}
-            {context_str}
-            
-            Provide a helpful, accurate response. If you need more information to answer properly, say so.
-            Keep responses concise and in plain language.
-            """
-            
-            response = self.client.messages.create(
-                model="claude-3-haiku-20240307",
+            response = self.client.chat.completions.create(
+                model="gpt-4.1",
+                messages=messages,
                 max_tokens=500,
-                temperature=0.3,
-                messages=[{"role": "user", "content": prompt}]
+                temperature=0.3
             )
             
-            return response.content[0].text
+            return response.choices[0].message.content
             
         except Exception as e:
             return f"Error getting AI response: {str(e)}"
+    
+    def get_city_insights(self, city_name: str, city_context: str, question: str, violations_data: Any = None) -> str:
+        """Get AI insights about water quality in a specific city"""
+        if not self.enabled:
+            return "OpenAI API not configured. Add your OPENAI_API_KEY to .env file for AI insights."
+        
+        try:
+            # Build detailed context
+            violation_details = ""
+            if violations_data is not None and not violations_data.empty:
+                # Get top violations
+                violation_summary = violations_data.groupby('VIOLATION_DESC').size().sort_values(ascending=False).head(5)
+                violation_details = f"\n\nTop violations in {city_name}:\n"
+                for violation, count in violation_summary.items():
+                    violation_details += f"- {violation}: {count} systems\n"
+            
+            prompt = f"""
+            You are a water quality expert providing insights about drinking water in {city_name}, Georgia.
+            
+            City Data:
+            {city_context}
+            {violation_details}
+            
+            User Question: {question}
+            
+            Provide a helpful, accurate response that:
+            1. Directly answers the question
+            2. References specific data about {city_name}
+            3. Offers practical advice for residents
+            4. Uses plain language
+            
+            Keep the response focused and informative.
+            """
+            
+            response = self.client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[
+                    {"role": "developer", "content": "You are a water quality expert assistant helping Georgia residents understand their local drinking water quality. Use the provided data to give specific, helpful insights."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=400,
+                temperature=0.2
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            return f"Error getting AI insight: {str(e)}"

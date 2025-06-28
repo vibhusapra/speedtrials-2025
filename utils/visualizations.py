@@ -2,6 +2,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
+import numpy as np
 from typing import Optional, Dict, Any
 import folium
 
@@ -14,9 +15,12 @@ def create_violation_timeline(violations_df: pd.DataFrame) -> go.Figure:
             font=dict(size=20)
         )
     
-    # Prepare data
-    violations_df['BEGIN_DATE'] = pd.to_datetime(violations_df['NON_COMPL_PER_BEGIN_DATE'])
-    violations_df['END_DATE'] = pd.to_datetime(violations_df['NON_COMPL_PER_END_DATE'])
+    # Prepare data with error handling for invalid dates
+    violations_df['BEGIN_DATE'] = pd.to_datetime(violations_df['NON_COMPL_PER_BEGIN_DATE'], errors='coerce')
+    violations_df['END_DATE'] = pd.to_datetime(violations_df['NON_COMPL_PER_END_DATE'], errors='coerce')
+    
+    # Remove rows with invalid dates
+    violations_df = violations_df.dropna(subset=['BEGIN_DATE'])
     
     # Color by status
     color_map = {
@@ -28,18 +32,35 @@ def create_violation_timeline(violations_df: pd.DataFrame) -> go.Figure:
     
     fig = go.Figure()
     
+    # Group violations by type and status to show counts
+    violation_counts = violations_df.groupby(['VIOLATION_DESC', 'VIOLATION_STATUS']).size().reset_index(name='count')
+    
     for status, color in color_map.items():
         df_status = violations_df[violations_df['VIOLATION_STATUS'] == status]
         if not df_status.empty:
+            # Get count for each violation type
+            counts_by_type = df_status.groupby('VIOLATION_DESC').size()
+            
             fig.add_trace(go.Scatter(
                 x=df_status['BEGIN_DATE'],
                 y=df_status['VIOLATION_DESC'],
                 mode='markers',
-                name=status,
+                name=f"{status} ({len(df_status)})",
                 marker=dict(color=color, size=10),
-                text=df_status.apply(lambda x: f"Code: {x['VIOLATION_CODE']}<br>Health-based: {x['IS_HEALTH_BASED_IND']}", axis=1),
-                hovertemplate='%{y}<br>%{x}<br>%{text}<extra></extra>'
+                hoverinfo='skip'  # Disable hover
             ))
+    
+    # Add text annotations for violation counts
+    for violation_type in violations_df['VIOLATION_DESC'].unique():
+        count = len(violations_df[violations_df['VIOLATION_DESC'] == violation_type])
+        fig.add_annotation(
+            x=violations_df[violations_df['VIOLATION_DESC'] == violation_type]['BEGIN_DATE'].max(),
+            y=violation_type,
+            text=f" ({count})",
+            showarrow=False,
+            xanchor='left',
+            font=dict(size=10, color='black')
+        )
     
     fig.update_layout(
         title="Violation Timeline",
@@ -47,7 +68,7 @@ def create_violation_timeline(violations_df: pd.DataFrame) -> go.Figure:
         yaxis_title="Violation Type",
         height=500,
         showlegend=True,
-        hovermode='closest'
+        hovermode=False  # Disable hover mode
     )
     
     return fig
@@ -85,40 +106,61 @@ def create_population_impact_bar(top_violators_df: pd.DataFrame) -> go.Figure:
     if top_violators_df.empty:
         return go.Figure()
     
-    # Sort by population to show biggest impact
-    df = top_violators_df.sort_values('POPULATION_SERVED_COUNT', ascending=True).tail(15)
+    # Sort by violation count to show worst offenders
+    df = top_violators_df.sort_values('violation_count', ascending=True).tail(15)
+    
+    # Create labels with just the water system name
+    df['label'] = df['PWS_NAME']
+    
+    # Calculate non-health violations
+    df['non_health_violations'] = df['violation_count'] - df['health_violations']
     
     fig = go.Figure()
     
-    # Add bars for total violations
+    # Add bars for non-health violations (base)
     fig.add_trace(go.Bar(
-        name='Total Violations',
-        y=df['PWS_NAME'],
-        x=df['violation_count'],
+        name='Other Violations',
+        y=df['label'],
+        x=df['non_health_violations'],
         orientation='h',
         marker_color='lightblue',
-        text=df['violation_count'],
-        textposition='auto',
+        text=df['non_health_violations'].apply(lambda x: str(x) if x > 0 else ''),
+        textposition='inside',
+        hovertemplate='%{x} non-health violations<extra></extra>'
     ))
     
-    # Add bars for health violations
+    # Add bars for health violations (stacked on top)
     fig.add_trace(go.Bar(
         name='Health-Based Violations',
-        y=df['PWS_NAME'],
+        y=df['label'],
         x=df['health_violations'],
         orientation='h',
-        marker_color='red',
-        text=df['health_violations'],
-        textposition='auto',
+        marker_color='#dc3545',
+        text=df['health_violations'].apply(lambda x: str(x) if x > 0 else ''),
+        textposition='inside',
+        hovertemplate='%{x} health violations<extra></extra>'
     ))
+    
+    # Add total count annotations at the end of each bar
+    for idx, row in df.iterrows():
+        fig.add_annotation(
+            x=row['violation_count'] + 2,
+            y=row['label'],
+            text=f"Total: {row['violation_count']}",
+            showarrow=False,
+            font=dict(size=10, color='black'),
+            xanchor='left'
+        )
     
     fig.update_layout(
         title="Water Systems with Most Violations",
         xaxis_title="Number of Violations",
-        yaxis_title="Water System",
+        yaxis_title="",
         height=600,
-        barmode='overlay',
-        showlegend=True
+        barmode='stack',  # Changed to stack mode
+        showlegend=True,
+        margin=dict(l=250, r=80),  # Space for labels and totals
+        xaxis=dict(range=[0, df['violation_count'].max() * 1.15])  # Extra space for total labels
     )
     
     return fig
@@ -128,8 +170,11 @@ def create_lead_copper_scatter(lcr_df: pd.DataFrame) -> go.Figure:
     if lcr_df.empty:
         return go.Figure()
     
-    # Convert dates
-    lcr_df['SAMPLING_DATE'] = pd.to_datetime(lcr_df['SAMPLING_END_DATE'])
+    # Convert dates with error handling
+    lcr_df['SAMPLING_DATE'] = pd.to_datetime(lcr_df['SAMPLING_END_DATE'], errors='coerce')
+    
+    # Remove rows with invalid dates
+    lcr_df = lcr_df.dropna(subset=['SAMPLING_DATE'])
     
     # EPA action levels
     lead_action = 15  # ppb
@@ -153,14 +198,13 @@ def create_lead_copper_scatter(lcr_df: pd.DataFrame) -> go.Figure:
                 mode='markers',
                 name='Lead Samples',
                 marker=dict(color='blue', size=8),
-                text=lead_df['PWS_NAME'],
-                hovertemplate='%{text}<br>Lead: %{y} ppb<br>Date: %{x}<extra></extra>'
+                hovertemplate='%{y} ppb<extra></extra>'
             ),
             row=1, col=1
         )
         # Add action level line
         fig.add_hline(y=lead_action, line_dash="dash", line_color="red",
-                      annotation_text="EPA Action Level", row=1, col=1)
+                      annotation_text="EPA Action Level (15 ppb)", row=1, col=1)
     
     # Copper data
     copper_df = lcr_df[lcr_df['CONTAMINANT_CODE'] == '5001']
@@ -172,14 +216,13 @@ def create_lead_copper_scatter(lcr_df: pd.DataFrame) -> go.Figure:
                 mode='markers',
                 name='Copper Samples',
                 marker=dict(color='orange', size=8),
-                text=copper_df['PWS_NAME'],
-                hovertemplate='%{text}<br>Copper: %{y} ppb<br>Date: %{x}<extra></extra>'
+                hovertemplate='%{y} ppb<extra></extra>'
             ),
             row=2, col=1
         )
         # Add action level line
         fig.add_hline(y=copper_action, line_dash="dash", line_color="red",
-                      annotation_text="EPA Action Level", row=2, col=1)
+                      annotation_text="EPA Action Level (1300 ppb)", row=2, col=1)
     
     fig.update_yaxes(title_text="Lead (ppb)", row=1, col=1)
     fig.update_yaxes(title_text="Copper (ppb)", row=2, col=1)
@@ -193,23 +236,70 @@ def create_lead_copper_scatter(lcr_df: pd.DataFrame) -> go.Figure:
     
     return fig
 
-def create_geographic_heatmap(geo_summary_df: pd.DataFrame) -> go.Figure:
+def create_geographic_heatmap(geo_summary_df: pd.DataFrame, use_log_scale: bool = False) -> go.Figure:
     """Create choropleth map of violations by city"""
     if geo_summary_df.empty:
         return go.Figure()
     
-    # Create treemap as alternative to geographic map
-    fig = px.treemap(
-        geo_summary_df.head(50),  # Top 50 cities
-        path=[px.Constant("Georgia"), 'CITY_NAME'],
-        values='violation_count',
-        color='violation_count',
-        hover_data=['system_count', 'total_population'],
-        color_continuous_scale='Reds',
-        title="Violations by City"
-    )
+    # Calculate additional metrics
+    df = geo_summary_df.head(50).copy()  # Top 50 cities
+    df['violations_per_system'] = (df['violation_count'] / df['system_count']).round(1)
+    df['violations_per_1k_pop'] = ((df['violation_count'] / df['total_population']) * 1000).round(2)
     
-    fig.update_layout(height=600)
+    # Handle NaN values
+    df['violations_per_system'] = df['violations_per_system'].fillna(0)
+    
+    # Use violation count directly for color - simpler and more intuitive
+    # The size already represents count, so color can too
+    min_violations = df['violation_count'].min()
+    max_violations = df['violation_count'].max()
+    
+    # Create treemap - use violation_count for sizing, violations_per_system for color
+    fig = go.Figure(go.Treemap(
+        labels=df['CITY_NAME'],
+        parents=['Georgia'] * len(df),
+        values=df['violation_count'],
+        text=[f"<b>{city}</b><br>{count} violations" for city, count in zip(df['CITY_NAME'], df['violation_count'])],
+        textinfo="text",
+        marker=dict(
+            colorscale=[
+                [0, 'white'],
+                [0.1, '#fee5d9'],
+                [0.2, '#fcbba1'],
+                [0.3, '#fc9272'],
+                [0.4, '#fb6a4a'],
+                [0.5, '#ef3b2c'],
+                [0.6, '#cb181d'],
+                [0.7, '#a50f15'],
+                [0.8, '#67000d'],
+                [1.0, '#3f0000']
+            ],
+            cmin=min_violations,
+            cmax=max_violations,
+            colorbar=dict(
+                title="Total<br>Violations",
+                titleside="right",
+                tickmode='linear',
+                tick0=0,
+                dtick=max(1, (max_violations - min_violations) / 5)
+            ),
+            colors=df['violation_count']
+        ),
+        customdata=df[['system_count', 'total_population', 'violations_per_system', 'violations_per_1k_pop']].values,
+        hovertemplate='<b>%{label}</b><br>' +
+                      'Total Violations: %{value}<br>' +
+                      'Water Systems: %{customdata[0]}<br>' +
+                      'Population: %{customdata[1]:,.0f}<br>' +
+                      'Avg per System: %{customdata[2]}<br>' +
+                      'Per 1k Population: %{customdata[3]}<extra></extra>'
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        title="Violations by City (Size & Color = Total Violations)",
+        height=600,
+        margin=dict(t=50, l=25, r=25, b=25)
+    )
     
     return fig
 
