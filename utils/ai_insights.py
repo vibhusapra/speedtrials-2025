@@ -195,11 +195,17 @@ class AIInsights:
             # Build detailed context
             violation_details = ""
             if violations_data is not None and not violations_data.empty:
-                # Get top violations
-                violation_summary = violations_data.groupby('VIOLATION_DESC').size().sort_values(ascending=False).head(5)
-                violation_details = f"\n\nTop violations in {city_name}:\n"
-                for violation, count in violation_summary.items():
-                    violation_details += f"- {violation}: {count} systems\n"
+                # Check if we have violation data or just system data
+                if 'VIOLATION_DESC' in violations_data.columns:
+                    # We have violation data
+                    violation_summary = violations_data.groupby('VIOLATION_DESC').size().sort_values(ascending=False).head(5)
+                    violation_details = f"\n\nTop violations in {city_name}:\n"
+                    for violation, count in violation_summary.items():
+                        violation_details += f"- {violation}: {count} systems\n"
+                else:
+                    # We have system search results, just count systems
+                    system_count = len(violations_data)
+                    violation_details = f"\n\nFound {system_count} water systems in {city_name} area."
             
             prompt = f"""
             You are a water quality expert providing insights about drinking water in {city_name}, Georgia.

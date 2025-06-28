@@ -16,10 +16,19 @@ def create_violation_timeline(violations_df: pd.DataFrame) -> go.Figure:
         )
     
     # Prepare data with error handling for invalid dates
-    violations_df['BEGIN_DATE'] = pd.to_datetime(violations_df['NON_COMPL_PER_BEGIN_DATE'], errors='coerce')
-    violations_df['END_DATE'] = pd.to_datetime(violations_df['NON_COMPL_PER_END_DATE'], errors='coerce')
+    # Handle different date formats and invalid values
+    violations_df['BEGIN_DATE'] = pd.to_datetime(
+        violations_df['NON_COMPL_PER_BEGIN_DATE'], 
+        format='%m/%d/%Y', 
+        errors='coerce'
+    )
+    violations_df['END_DATE'] = pd.to_datetime(
+        violations_df['NON_COMPL_PER_END_DATE'].replace('--->', pd.NaT), 
+        format='%m/%d/%Y', 
+        errors='coerce'
+    )
     
-    # Remove rows with invalid dates
+    # Remove rows with invalid begin dates
     violations_df = violations_df.dropna(subset=['BEGIN_DATE'])
     
     # Color by status
@@ -171,7 +180,11 @@ def create_lead_copper_scatter(lcr_df: pd.DataFrame) -> go.Figure:
         return go.Figure()
     
     # Convert dates with error handling
-    lcr_df['SAMPLING_DATE'] = pd.to_datetime(lcr_df['SAMPLING_END_DATE'], errors='coerce')
+    lcr_df['SAMPLING_DATE'] = pd.to_datetime(
+        lcr_df['SAMPLING_END_DATE'].replace('--->', pd.NaT), 
+        format='%m/%d/%Y', 
+        errors='coerce'
+    )
     
     # Remove rows with invalid dates
     lcr_df = lcr_df.dropna(subset=['SAMPLING_DATE'])

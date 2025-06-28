@@ -16,6 +16,8 @@ from utils.visualizations import (
 )
 from utils.ai_insights import AIInsights
 from utils.letters import ComplianceLetterGenerator
+from utils.voice_simple import create_simple_voice_interface
+from utils.voice_component import create_realtime_voice_interface
 
 # Page config
 st.set_page_config(
@@ -140,12 +142,14 @@ elif st.session_state.user_role == "Regulator":
         "📈 KPI Dashboard"
     ])
 else:  # Public User
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "🏠 Overview", 
         "🔍 Check My Water", 
         "📊 Violations Map",
         "🧪 Lead & Copper",
-        "🤖 AI Assistant"
+        "🤖 AI Assistant",
+        "🎤 Voice Assistant",
+        "🏆 Hackathon"
     ])
 
 with tab1:
@@ -508,7 +512,7 @@ if st.session_state.user_role == "Water System Operator" and 'tab2' in locals():
                     # Compliance rate over time
                     compliance_trend = db.query_df("""
                         SELECT 
-                            DATE(NON_COMPL_PER_BEGIN_DATE, 'start of month') as month,
+                            strftime('%Y-%m', NON_COMPL_PER_BEGIN_DATE) as month,
                             COUNT(CASE WHEN VIOLATION_STATUS = 'Resolved' THEN 1 END) as resolved,
                             COUNT(*) as total
                         FROM violations_enforcement
@@ -928,12 +932,27 @@ elif 'tab2' in locals():
                 if st.button("Ask AI", type="primary"):
                     if user_question:
                         with st.spinner("Analyzing city data..."):
+                            # Get actual violation data for the city
+                            city_violations = db.query_df("""
+                                SELECT 
+                                    v.*,
+                                    r.VALUE_DESCRIPTION as VIOLATION_DESC,
+                                    p.PWS_NAME,
+                                    p.CITY_NAME
+                                FROM violations_enforcement v
+                                JOIN pub_water_systems p ON v.PWSID = p.PWSID
+                                LEFT JOIN ref_code_values r ON v.VIOLATION_CODE = r.VALUE_CODE 
+                                    AND r.VALUE_TYPE = 'VIOLATION_CODE'
+                                WHERE UPPER(p.CITY_NAME) LIKE ?
+                                AND v.VIOLATION_STATUS = 'Unaddressed'
+                            """, (f"%{search_term.upper()}%",))
+                            
                             # Get AI response with city context
                             response = ai.get_city_insights(
                                 city_name=city_info['CITY_NAME'],
                                 city_context=context,
                                 question=user_question,
-                                violations_data=results if not results.empty else None
+                                violations_data=city_violations if not city_violations.empty else None
                             )
                             
                             st.session_state.city_messages.append({
@@ -1110,6 +1129,57 @@ with tab5:
         - Personalized recommendations
         - Interactive Q&A about water safety
         """)
+
+# Voice Assistant Tab (Public Users only)
+if 'tab6' in locals():
+    with tab6:
+        st.header("🎤 Voice-Powered Water Quality Assistant")
+        
+        st.markdown("""
+        Talk to our AI assistant about water quality concerns! Ask questions naturally using your voice.
+        
+        **Example questions:**
+        - "Is my water safe to drink?"
+        - "What violations does Atlanta have?"
+        - "Explain lead contamination"
+        - "How do I test my water?"
+        """)
+        
+        # Choice between simple TTS and realtime voice
+        voice_mode = st.radio(
+            "Select Voice Mode:",
+            ["Text-to-Speech (Simple)", "Real-time Voice (Advanced)"],
+            help="Simple mode types questions and hears responses. Advanced mode allows speaking directly."
+        )
+        
+        st.markdown("---")
+        
+        if voice_mode == "Text-to-Speech (Simple)":
+            # Simple TTS interface
+            create_simple_voice_interface(db, ai)
+            
+            # City-specific voice context
+            if search_term:
+                st.markdown("---")
+                st.info(f"💡 **Tip:** Ask voice questions about {search_term} for city-specific answers!")
+                
+                # Pre-filled city questions
+                city_questions = [
+                    f"What are the water quality issues in {search_term}?",
+                    f"Is tap water safe to drink in {search_term}?",
+                    f"How many violations does {search_term} have?"
+                ]
+                
+                st.markdown("### 🏙️ City-Specific Questions")
+                cols = st.columns(2)
+                for i, q in enumerate(city_questions[:2]):
+                    with cols[i]:
+                        if st.button(q, key=f"city_q_{i}"):
+                            st.session_state.voice_question = q
+                            st.rerun()
+        else:
+            # Real-time voice interface
+            create_realtime_voice_interface(db, ai)
 
 # Footer
 st.markdown("---")

@@ -23,3 +23,6 @@ pydantic
 
 # PDF generation
 reportlab==4.0.7
+
+# Voice support (using OpenAI TTS and Realtime API)
+websocket-client==1.7.0
