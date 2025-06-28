@@ -12,6 +12,7 @@ import threading
 from typing import Optional, Callable, Dict, Any
 from queue import Queue
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -52,9 +53,10 @@ class RealtimeVoiceAssistant:
             on_close=self.on_close
         )
         
-        # Run WebSocket in separate thread
+        # Run WebSocket in separate thread with Streamlit context
         ws_thread = threading.Thread(target=self.ws.run_forever)
         ws_thread.daemon = True
+        add_script_run_ctx(ws_thread)
         ws_thread.start()
         
         # Wait for connection
@@ -143,10 +145,12 @@ class RealtimeVoiceAssistant:
                     self.transcript_callback('complete', '')
                     
             elif event_type == 'error':
-                error_msg = data.get('error', {}).get('message', 'Unknown error')
-                print(f"API Error: {error_msg}")
+                error_data = data.get('error', {})
+                error_msg = error_data.get('message', 'Unknown error')
+                error_code = error_data.get('code', '')
+                print(f"API Error [{error_code}]: {error_msg}")
                 if self.error_callback:
-                    self.error_callback(error_msg)
+                    self.error_callback(f"{error_code}: {error_msg}")
                     
         except Exception as e:
             print(f"Error processing message: {e}")
@@ -243,7 +247,7 @@ class RealtimeVoiceAssistant:
                     "type": "message",
                     "role": "system",
                     "content": [{
-                        "type": "text",
+                        "type": "input_text",
                         "text": context_text
                     }]
                 }

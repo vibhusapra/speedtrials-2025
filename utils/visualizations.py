@@ -202,7 +202,7 @@ def create_lead_copper_scatter(lcr_df: pd.DataFrame) -> go.Figure:
     )
     
     # Lead data
-    lead_df = lcr_df[lcr_df['CONTAMINANT_CODE'] == '5000']
+    lead_df = lcr_df[lcr_df['CONTAMINANT_CODE'] == 'PB90']
     if not lead_df.empty:
         fig.add_trace(
             go.Scatter(
@@ -220,7 +220,7 @@ def create_lead_copper_scatter(lcr_df: pd.DataFrame) -> go.Figure:
                       annotation_text="EPA Action Level (15 ppb)", row=1, col=1)
     
     # Copper data
-    copper_df = lcr_df[lcr_df['CONTAMINANT_CODE'] == '5001']
+    copper_df = lcr_df[lcr_df['CONTAMINANT_CODE'] == 'CU90']
     if not copper_df.empty:
         fig.add_trace(
             go.Scatter(

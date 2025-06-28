@@ -160,7 +160,7 @@ class WaterDatabase:
         JOIN pub_water_systems p ON l.PWSID = p.PWSID
         LEFT JOIN ref_code_values r ON l.CONTAMINANT_CODE = r.VALUE_CODE 
             AND r.VALUE_TYPE = 'CONTAMINANT_CODE'
-        WHERE l.CONTAMINANT_CODE IN ('5000', '5001')  -- Lead and Copper codes
+        WHERE l.CONTAMINANT_CODE IN ('PB90', 'CU90')  -- Lead and Copper 90th percentile codes
         ORDER BY l.SAMPLING_END_DATE DESC
         """
         return self.query_df(query)

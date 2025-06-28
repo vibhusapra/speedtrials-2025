@@ -45,3 +45,6 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# Memes
+shitposting/memes  

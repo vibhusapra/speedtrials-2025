@@ -18,6 +18,8 @@ from utils.ai_insights import AIInsights
 from utils.letters import ComplianceLetterGenerator
 from utils.voice_simple import create_simple_voice_interface
 from utils.voice_component import create_realtime_voice_interface
+from utils.meme_generator import MemeGenerator
+from utils.meme_captions import MemeCaptionGenerator
 
 # Page config
 st.set_page_config(
@@ -94,33 +96,127 @@ with st.sidebar:
             st.session_state.selected_city = ""
             st.rerun()
     
-    # Quick stats
+    # Initiative Information
     st.markdown("---")
-    st.subheader("📊 Quick Stats")
+    st.markdown("### 💧 Georgia Water Initiative")
     
-    # Get summary stats
+    with st.expander("ℹ️ About This Initiative", expanded=True):
+        st.markdown("""
+        **Mission**: Making Georgia's drinking water data accessible and actionable for everyone.
+        
+        This dashboard modernizes how Georgians access water quality information by:
+        - 🔍 **Transparency**: Real-time access to all water quality data
+        - 🎯 **Simplicity**: Plain English explanations of violations
+        - 📱 **Accessibility**: Works on any device, includes voice features
+        - 🏛️ **Compliance**: Helps water systems meet EPA requirements
+        """)
+    
+    # Water Safety Quick Guide
+    st.markdown("---")
+    st.markdown("### 🚨 Water Safety Quick Guide")
+    
+    # Get critical stats
+    critical_stats = db.query_df("""
+        SELECT 
+            COUNT(DISTINCT p.PWSID) as systems_with_violations,
+            SUM(p.POPULATION_SERVED_COUNT) as affected_population,
+            COUNT(DISTINCT CASE WHEN v.IS_HEALTH_BASED_IND = 'Y' THEN v.PWSID END) as health_risk_systems
+        FROM violations_enforcement v
+        JOIN pub_water_systems p ON v.PWSID = p.PWSID
+        WHERE v.VIOLATION_STATUS = 'Unaddressed'
+    """).iloc[0]
+    
+    # Color-coded alert level
+    if critical_stats['health_risk_systems'] > 100:
+        alert_color = "#dc3545"  # Red
+        alert_text = "⚠️ Elevated Concern"
+    elif critical_stats['health_risk_systems'] > 50:
+        alert_color = "#ffc107"  # Yellow
+        alert_text = "⚡ Moderate Alert"
+    else:
+        alert_color = "#28a745"  # Green
+        alert_text = "✅ Normal Status"
+    
+    st.markdown(f"""
+    <div style='background-color: {alert_color}20; padding: 10px; border-radius: 5px; border-left: 4px solid {alert_color};'>
+        <strong style='color: {alert_color};'>{alert_text}</strong><br>
+        <small>{critical_stats['health_risk_systems']:,} systems with health-based violations</small>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Key metrics with context
+    st.markdown("---")
+    st.markdown("### 📊 Statewide Overview")
+    
+    # Get total systems for calculations
     summary = db.query_df("""
         SELECT 
             COUNT(DISTINCT PWSID) as total_systems,
-            SUM(POPULATION_SERVED_COUNT) as total_population,
-            COUNT(DISTINCT CASE WHEN PWS_TYPE_CODE = 'CWS' THEN PWSID END) as community_systems
+            SUM(POPULATION_SERVED_COUNT) as total_population
         FROM pub_water_systems
     """).iloc[0]
     
-    violations_summary = db.query_df("""
-        SELECT 
-            COUNT(CASE WHEN VIOLATION_STATUS = 'Unaddressed' THEN 1 END) as active_violations,
-            COUNT(CASE WHEN IS_HEALTH_BASED_IND = 'Y' THEN 1 END) as health_violations
-        FROM violations_enforcement
-    """).iloc[0]
+    # Calculate percentages
+    total_systems = summary['total_systems']
+    compliance_rate = ((total_systems - critical_stats['systems_with_violations']) / total_systems * 100)
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Water Systems", f"{summary['total_systems']:,}")
-        st.metric("Active Violations", f"{violations_summary['active_violations']:,}")
-    with col2:
-        st.metric("Population Served", f"{int(summary['total_population']):,}")
-        st.metric("Health Violations", f"{violations_summary['health_violations']:,}")
+    # Display meaningful metrics
+    st.metric(
+        "Systems in Compliance", 
+        f"{compliance_rate:.1f}%",
+        help="Percentage of water systems meeting all EPA standards"
+    )
+    
+    st.metric(
+        "Georgians Affected", 
+        f"{int(critical_stats['affected_population']):,}",
+        delta=f"{critical_stats['affected_population']/summary['total_population']*100:.1f}% of population",
+        delta_color="inverse",
+        help="Population served by systems with active violations"
+    )
+    
+    st.metric(
+        "Health-Risk Systems",
+        f"{critical_stats['health_risk_systems']:,}",
+        delta=f"{critical_stats['systems_with_violations']:,} total with violations",
+        delta_color="inverse",
+        help="Systems with violations that may impact health"
+    )
+    
+    # Common concerns
+    st.markdown("---")
+    st.markdown("### ❓ Common Concerns")
+    
+    common_violations = db.query_df("""
+        SELECT 
+            r.VALUE_DESCRIPTION as violation_type,
+            COUNT(*) as count
+        FROM violations_enforcement v
+        LEFT JOIN ref_code_values r ON v.VIOLATION_CODE = r.VALUE_CODE 
+            AND r.VALUE_TYPE = 'VIOLATION_CODE'
+        WHERE v.VIOLATION_STATUS = 'Unaddressed'
+            AND r.VALUE_DESCRIPTION IS NOT NULL
+        GROUP BY r.VALUE_DESCRIPTION
+        ORDER BY count DESC
+        LIMIT 3
+    """)
+    
+    if not common_violations.empty:
+        st.markdown("**Top Issues:**")
+        for _, row in common_violations.iterrows():
+            st.markdown(f"• {row['violation_type']} ({row['count']})")
+    
+    # Emergency contacts
+    st.markdown("---")
+    st.markdown("### 📞 Important Contacts")
+    
+    st.markdown("""
+    **Water Emergency**: Call your water provider  
+    **EPA Safe Drinking Water Hotline**: 1-800-426-4791  
+    **Georgia EPD**: (404) 656-4713  
+    
+    <small>💡 Tip: Search your city above to find your water provider's contact info</small>
+    """, unsafe_allow_html=True)
 
 # Main content - tabs based on user role
 if st.session_state.user_role == "Water System Operator":
@@ -142,14 +238,15 @@ elif st.session_state.user_role == "Regulator":
         "📈 KPI Dashboard"
     ])
 else:  # Public User
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "🏠 Overview", 
         "🔍 Check My Water", 
         "📊 Violations Map",
         "🧪 Lead & Copper",
         "🤖 AI Assistant",
         "🎤 Voice Assistant",
-        "🏆 Hackathon"
+        "🏆 Hackathon",
+        "🔥 Meme Generator"
     ])
 
 with tab1:
@@ -202,6 +299,15 @@ with tab1:
             COUNT(CASE WHEN IS_HEALTH_BASED_IND = 'Y' THEN 1 END) as recent_health
         FROM violations_enforcement
         WHERE NON_COMPL_PER_BEGIN_DATE >= date('now', '-30 days')
+    """).iloc[0]
+    
+    # Get violations summary
+    violations_summary = db.query_df("""
+        SELECT 
+            COUNT(*) as active_violations,
+            COUNT(CASE WHEN IS_HEALTH_BASED_IND = 'Y' THEN 1 END) as health_violations
+        FROM violations_enforcement
+        WHERE VIOLATION_STATUS = 'Unaddressed'
     """).iloc[0]
     
     col1, col2, col3, col4 = st.columns(4)
@@ -1030,105 +1136,115 @@ with tab3:
     if not common_violations.empty:
         st.dataframe(common_violations, use_container_width=True)
 
-with tab4:
-    st.header("Lead & Copper Analysis")
-    
-    # Get lead/copper data
-    lcr_data = db.get_lead_copper_summary()
-    
-    if not lcr_data.empty:
-        # Create scatter plot
-        fig = create_lead_copper_scatter(lcr_data)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Summary statistics
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Lead Statistics")
-            lead_data = lcr_data[lcr_data['CONTAMINANT_CODE'] == '5000']
-            if not lead_data.empty:
-                st.metric("Total Lead Tests", len(lead_data))
-                st.metric("Systems Tested", lead_data['PWSID'].nunique())
-                st.metric("Samples Above 15 ppb", len(lead_data[lead_data['SAMPLE_MEASURE'] > 15]))
-        
-        with col2:
-            st.subheader("Copper Statistics")
-            copper_data = lcr_data[lcr_data['CONTAMINANT_CODE'] == '5001']
-            if not copper_data.empty:
-                st.metric("Total Copper Tests", len(copper_data))
-                st.metric("Systems Tested", copper_data['PWSID'].nunique())
-                st.metric("Samples Above 1300 ppb", len(copper_data[copper_data['SAMPLE_MEASURE'] > 1300]))
-        
-        # Recent high results
-        st.subheader("⚠️ Recent High Results")
-        high_results = lcr_data[
-            ((lcr_data['CONTAMINANT_CODE'] == '5000') & (lcr_data['SAMPLE_MEASURE'] > 15)) |
-            ((lcr_data['CONTAMINANT_CODE'] == '5001') & (lcr_data['SAMPLE_MEASURE'] > 1300))
-        ].sort_values('SAMPLING_END_DATE', ascending=False).head(10)
-        
-        if not high_results.empty:
-            display_cols = ['PWS_NAME', 'CITY_NAME', 'CONTAMINANT_NAME', 'SAMPLE_MEASURE', 'UNIT_OF_MEASURE', 'SAMPLING_END_DATE']
-            st.dataframe(high_results[display_cols], use_container_width=True)
-    else:
-        st.info("No lead and copper test data available.")
+# Lead & Copper tab - determine which tab based on user role
+lead_copper_tab = None
+if st.session_state.user_role == "Public User":
+    lead_copper_tab = tab4
+elif st.session_state.user_role in ["Water System Operator", "Regulator"]:
+    lead_copper_tab = tab5
 
-with tab5:
-    st.header("🤖 AI-Powered Insights")
-    
-    if ai.enabled:
-        st.success("OpenAI ChatGPT is connected and ready to help!")
+if lead_copper_tab:
+    with lead_copper_tab:
+        st.header("Lead & Copper Analysis")
         
-        # Chat interface
-        st.subheader("Ask About Water Quality")
+        # Get lead/copper data
+        lcr_data = db.get_lead_copper_summary()
         
-        user_question = st.text_area(
-            "Ask a question about Georgia's water quality:",
-            placeholder="e.g., What does a Stage 2 Disinfectants violation mean? Is lead in water dangerous?",
-            height=100
-        )
+        if not lcr_data.empty:
+            # Create scatter plot
+            fig = create_lead_copper_scatter(lcr_data)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Summary statistics
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Lead Statistics")
+                lead_data = lcr_data[lcr_data['CONTAMINANT_CODE'] == 'PB90']
+                if not lead_data.empty:
+                    st.metric("Total Lead Tests", len(lead_data))
+                    st.metric("Systems Tested", lead_data['PWSID'].nunique())
+                    st.metric("Samples Above 15 ppb", len(lead_data[lead_data['SAMPLE_MEASURE'] > 15]))
+            
+            with col2:
+                st.subheader("Copper Statistics")
+                copper_data = lcr_data[lcr_data['CONTAMINANT_CODE'] == 'CU90']
+                if not copper_data.empty:
+                    st.metric("Total Copper Tests", len(copper_data))
+                    st.metric("Systems Tested", copper_data['PWSID'].nunique())
+                    st.metric("Samples Above 1300 ppb", len(copper_data[copper_data['SAMPLE_MEASURE'] > 1300]))
+            
+            # Recent high results
+            st.subheader("⚠️ Recent High Results")
+            high_results = lcr_data[
+                ((lcr_data['CONTAMINANT_CODE'] == 'PB90') & (lcr_data['SAMPLE_MEASURE'] > 15)) |
+                ((lcr_data['CONTAMINANT_CODE'] == 'CU90') & (lcr_data['SAMPLE_MEASURE'] > 1300))
+            ].sort_values('SAMPLING_END_DATE', ascending=False).head(10)
+            
+            if not high_results.empty:
+                display_cols = ['PWS_NAME', 'CITY_NAME', 'CONTAMINANT_NAME', 'SAMPLE_MEASURE', 'UNIT_OF_MEASURE', 'SAMPLING_END_DATE']
+                st.dataframe(high_results[display_cols], use_container_width=True)
+        else:
+            st.info("No lead and copper test data available.")
+
+# AI Assistant tab - only for Public User
+if st.session_state.user_role == "Public User" and 'tab5' in locals():
+    with tab5:
+        st.header("🤖 AI-Powered Insights")
         
-        if st.button("Get Answer", type="primary"):
-            if user_question:
-                with st.spinner("Thinking..."):
-                    response = ai.chat_query(user_question)
-                    st.markdown("### Answer:")
-                    st.write(response)
-        
-        # System analysis
-        st.markdown("---")
-        st.subheader("System Analysis")
-        
-        analysis_pwsid = st.text_input(
-            "Enter PWSID for AI analysis:",
-            placeholder="e.g., GA0670000"
-        )
-        
-        if st.button("Analyze System"):
-            if analysis_pwsid:
-                with st.spinner("Analyzing..."):
-                    system_data = db.get_system_details(analysis_pwsid)
-                    if system_data:
-                        analysis = ai.analyze_system_health(system_data)
-                        st.markdown("### AI Analysis:")
-                        st.write(analysis)
-                    else:
-                        st.error("System not found.")
-    else:
-        st.warning("""
-        🔐 **OpenAI ChatGPT not configured**
-        
-        To enable AI-powered insights:
-        1. Get an API key from [OpenAI Platform](https://platform.openai.com/api-keys)
-        2. Add it to your `.env` file: `OPENAI_API_KEY=your_key_here`
-        3. Restart the app
-        
-        AI features include:
-        - Plain English explanations of violations
-        - Water quality assessments
-        - Personalized recommendations
-        - Interactive Q&A about water safety
-        """)
+        if ai.enabled:
+            st.success("OpenAI ChatGPT is connected and ready to help!")
+            
+            # Chat interface
+            st.subheader("Ask About Water Quality")
+            
+            user_question = st.text_area(
+                "Ask a question about Georgia's water quality:",
+                placeholder="e.g., What does a Stage 2 Disinfectants violation mean? Is lead in water dangerous?",
+                height=100
+            )
+            
+            if st.button("Get Answer", type="primary"):
+                if user_question:
+                    with st.spinner("Thinking..."):
+                        response = ai.chat_query(user_question)
+                        st.markdown("### Answer:")
+                        st.write(response)
+            
+            # System analysis
+            st.markdown("---")
+            st.subheader("System Analysis")
+            
+            analysis_pwsid = st.text_input(
+                "Enter PWSID for AI analysis:",
+                placeholder="e.g., GA0670000"
+            )
+            
+            if st.button("Analyze System"):
+                if analysis_pwsid:
+                    with st.spinner("Analyzing..."):
+                        system_data = db.get_system_details(analysis_pwsid)
+                        if system_data:
+                            analysis = ai.analyze_system_health(system_data)
+                            st.markdown("### AI Analysis:")
+                            st.write(analysis)
+                        else:
+                            st.error("System not found.")
+        else:
+            st.warning("""
+            🔐 **OpenAI ChatGPT not configured**
+            
+            To enable AI-powered insights:
+            1. Get an API key from [OpenAI Platform](https://platform.openai.com/api-keys)
+            2. Add it to your `.env` file: `OPENAI_API_KEY=your_key_here`
+            3. Restart the app
+            
+            AI features include:
+            - Plain English explanations of violations
+            - Water quality assessments
+            - Personalized recommendations
+            - Interactive Q&A about water safety
+            """)
 
 # Voice Assistant Tab (Public Users only)
 if 'tab6' in locals():
@@ -1480,6 +1596,287 @@ bash run_all.sh
             - [SDWIS Data](https://www.epa.gov/ground-water-and-drinking-water)
             - [OpenAI Docs](https://platform.openai.com/docs)
             """)
+
+# Meme Generator Tab
+if 'tab8' in locals():
+    with tab8:
+        st.header("🔥 Water Quality Meme Generator")
+        
+        st.markdown("""
+        **Spread awareness about Georgia water quality through the power of memes!**
+        
+        Follow these simple steps to create your water quality awareness meme:
+        """)
+        
+        # Initialize generators
+        if 'meme_gen' not in st.session_state:
+            st.session_state.meme_gen = MemeGenerator()
+            st.session_state.caption_gen = MemeCaptionGenerator()
+        
+        if 'meme_step' not in st.session_state:
+            st.session_state.meme_step = 1
+        
+        meme_gen = st.session_state.meme_gen
+        caption_gen = st.session_state.caption_gen
+        
+        # Step indicator
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.session_state.meme_step == 1:
+                st.success("**Step 1: Choose Template** ✓")
+            else:
+                st.info("Step 1: Choose Template")
+        with col2:
+            if st.session_state.meme_step == 2:
+                st.success("**Step 2: Add Caption** ✓")
+            elif st.session_state.meme_step > 2:
+                st.info("Step 2: Add Caption ✓")
+            else:
+                st.info("Step 2: Add Caption")
+        with col3:
+            if st.session_state.meme_step == 3:
+                st.success("**Step 3: Generate Meme** ✓")
+            else:
+                st.info("Step 3: Generate Meme")
+        
+        st.markdown("---")
+        
+        # Step 1: Template Selection
+        if st.session_state.meme_step == 1:
+            st.subheader("📸 Step 1: Choose Your Meme Template")
+            
+            import os
+            meme_dir = "shitposting/memes"
+            all_templates = sorted([f for f in os.listdir(meme_dir) if f.endswith('.png')])
+            
+            # Show templates in a grid
+            cols_per_row = 5
+            rows = len(all_templates) // cols_per_row + (1 if len(all_templates) % cols_per_row else 0)
+            
+            for row in range(rows):
+                cols = st.columns(cols_per_row)
+                for col_idx in range(cols_per_row):
+                    template_idx = row * cols_per_row + col_idx
+                    if template_idx < len(all_templates):
+                        template = all_templates[template_idx]
+                        with cols[col_idx]:
+                            template_path = os.path.join(meme_dir, template)
+                            
+                            # Show template image
+                            try:
+                                st.image(template_path, use_column_width=True)
+                            except:
+                                st.text("No preview")
+                            
+                            # Button to select
+                            if st.button(
+                                template.replace('.png', '').replace('_', ' ').title()[:15],
+                                key=f"select_{template}",
+                                use_container_width=True
+                            ):
+                                st.session_state.selected_template = template
+                                st.session_state.meme_step = 2
+                                st.rerun()
+            
+            # Quick select for common templates
+            st.markdown("### 🎯 Popular Templates")
+            popular = ["drake.png", "distracted_boyfriend.png", "woman_yelling_at_cat.png", 
+                      "two_buttons.png", "expanding_brain.png", "surprised_pikachu.png"]
+            
+            popular_cols = st.columns(len(popular))
+            for idx, template in enumerate(popular):
+                if template in all_templates:
+                    with popular_cols[idx]:
+                        if st.button(template.replace('.png', '').replace('_', ' ').title(), 
+                                   key=f"quick_{template}"):
+                            st.session_state.selected_template = template
+                            st.session_state.meme_step = 2
+                            st.rerun()
+        
+        # Step 2: Caption Creation
+        elif st.session_state.meme_step == 2:
+            st.subheader("✍️ Step 2: Create Your Caption")
+            
+            # Show selected template
+            col1, col2 = st.columns([1, 2])
+            
+            with col1:
+                st.markdown("**Selected Template:**")
+                template_path = os.path.join("shitposting/memes", st.session_state.selected_template)
+                st.image(template_path, use_column_width=True)
+                
+                if st.button("← Change Template"):
+                    st.session_state.meme_step = 1
+                    st.rerun()
+            
+            with col2:
+                # Get template format
+                template_name = st.session_state.selected_template.replace('.png', '')
+                template_formats = caption_gen.get_template_formats()
+                template_format = template_formats.get(template_name, "Custom text")
+                
+                st.info(f"**Format Guide:** {template_format}")
+                
+                # Topic and tone selection
+                topics = caption_gen.get_water_topics()
+                selected_topic = st.selectbox(
+                    "What's your message about?",
+                    options=[t['id'] for t in topics],
+                    format_func=lambda x: next(t['icon'] + " " + t['name'] for t in topics if t['id'] == x)
+                )
+                
+                tone = st.radio(
+                    "Select tone:",
+                    ["funny", "educational", "sarcastic", "urgent"],
+                    horizontal=True
+                )
+                
+                # AI caption generation
+                if st.button("🤖 Generate AI Suggestions", type="primary"):
+                    with st.spinner("Generating captions..."):
+                        context = {
+                            "topic": selected_topic,
+                            "city": "Georgia"
+                        }
+                        captions = caption_gen.generate_batch_captions(
+                            template_name,
+                            template_format,
+                            count=3,
+                            context=context
+                        )
+                        st.session_state.ai_captions = captions
+                
+                # Show AI suggestions
+                if 'ai_captions' in st.session_state and st.session_state.ai_captions:
+                    st.markdown("**💡 AI Suggestions (click to use):**")
+                    for caption in st.session_state.ai_captions:
+                        if st.button(f"→ {caption}", key=f"use_{caption[:20]}"):
+                            st.session_state.caption_text = caption
+                
+                # Caption input
+                st.markdown("**Your Caption:**")
+                caption_text = st.text_area(
+                    "Type your caption (use | to separate top/bottom text):",
+                    value=st.session_state.get('caption_text', ''),
+                    height=100,
+                    placeholder="When the water tastes funny | But the city says it's fine"
+                )
+                
+                # Proceed button
+                if caption_text:
+                    if st.button("Continue to Generate →", type="primary"):
+                        st.session_state.caption_text = caption_text
+                        st.session_state.meme_step = 3
+                        st.rerun()
+                else:
+                    st.warning("Please enter a caption to continue")
+        
+        # Step 3: Generate and Download
+        elif st.session_state.meme_step == 3:
+            st.subheader("🎨 Step 3: Generate Your Meme")
+            
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                st.markdown("**Preview:**")
+                template_path = os.path.join("shitposting/memes", st.session_state.selected_template)
+                st.image(template_path, use_column_width=True)
+                
+                st.markdown("**Your Caption:**")
+                st.info(st.session_state.caption_text)
+                
+                # Text position
+                if "|" in st.session_state.caption_text:
+                    text_position = "both"
+                    st.markdown("*Text will appear at top and bottom*")
+                else:
+                    text_position = st.radio(
+                        "Text position:",
+                        ["top", "bottom"],
+                        horizontal=True
+                    )
+                
+                # Generate button
+                if st.button("🚀 Generate Meme!", type="primary", use_container_width=True):
+                    with st.spinner("Creating your meme..."):
+                        meme_bytes = meme_gen.generate_meme(
+                            template_path,
+                            st.session_state.caption_text,
+                            text_position
+                        )
+                        
+                        if meme_bytes:
+                            st.session_state.generated_meme = meme_bytes
+                            st.success("✅ Meme generated successfully!")
+                
+                # Back button
+                if st.button("← Edit Caption"):
+                    st.session_state.meme_step = 2
+                    st.rerun()
+            
+            with col2:
+                if 'generated_meme' in st.session_state:
+                    st.markdown("**🎉 Your Meme is Ready!**")
+                    st.image(st.session_state.generated_meme, use_column_width=True)
+                    
+                    # Download button
+                    st.download_button(
+                        label="📥 Download Meme",
+                        data=st.session_state.generated_meme,
+                        file_name=f"georgia_water_meme.png",
+                        mime="image/png",
+                        use_container_width=True
+                    )
+                    
+                    # Share section
+                    st.markdown("### 📱 Share Your Meme")
+                    st.code("#GeorgiaWater #WaterQuality #StayHydrated", language=None)
+                    
+                    # Create another button
+                    if st.button("🔄 Create Another Meme", type="secondary", use_container_width=True):
+                        # Reset state
+                        st.session_state.meme_step = 1
+                        if 'generated_meme' in st.session_state:
+                            del st.session_state.generated_meme
+                        if 'ai_captions' in st.session_state:
+                            del st.session_state.ai_captions
+                        if 'caption_text' in st.session_state:
+                            del st.session_state.caption_text
+                        st.rerun()
+                else:
+                    st.info("👈 Click 'Generate Meme' to create your meme")
+        
+        # Quick examples at bottom
+        st.markdown("---")
+        with st.expander("💡 Need Inspiration? See Examples"):
+            ex_col1, ex_col2, ex_col3 = st.columns(3)
+            
+            with ex_col1:
+                st.markdown("""
+                **Drake Format**
+                ```
+                Trusting the water without checking | 
+                Using our dashboard first
+                ```
+                """)
+            
+            with ex_col2:
+                st.markdown("""
+                **Woman Yelling at Cat**
+                ```
+                YOUR WATER HAS LEAD! | 
+                *me still making coffee*
+                ```
+                """)
+            
+            with ex_col3:
+                st.markdown("""
+                **Expanding Brain**
+                ```
+                Drinking tap | Buying bottled | 
+                Filtering water | Checking violations daily
+                ```
+                """)
 
 # Footer
 st.markdown("---")
