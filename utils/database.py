@@ -35,9 +35,9 @@ class WaterDatabase:
             OWNER_TYPE_CODE
         FROM pub_water_systems
         WHERE 
-            PWS_NAME LIKE ? OR 
-            PWSID LIKE ? OR 
-            CITY_NAME LIKE ?
+            UPPER(PWS_NAME) LIKE UPPER(?) OR 
+            UPPER(PWSID) LIKE UPPER(?) OR 
+            UPPER(CITY_NAME) LIKE UPPER(?)
         ORDER BY POPULATION_SERVED_COUNT DESC
         LIMIT 100
         """
@@ -164,6 +164,131 @@ class WaterDatabase:
         ORDER BY l.SAMPLING_END_DATE DESC
         """
         return self.query_df(query)
+    
+    def get_last_inspection(self, pwsid: str) -> dict:
+        """Get last inspection date and details for a system"""
+        query = """
+        SELECT 
+            VISIT_DATE as last_visit,
+            VISIT_REASON_CODE,
+            JULIANDAY('now') - JULIANDAY(
+                SUBSTR(VISIT_DATE, 7, 4) || '-' || 
+                SUBSTR(VISIT_DATE, 1, 2) || '-' || 
+                SUBSTR(VISIT_DATE, 4, 2)
+            ) as days_ago,
+            VISIT_COMMENTS
+        FROM site_visits 
+        WHERE PWSID = ?
+        ORDER BY VISIT_DATE DESC
+        LIMIT 1
+        """
+        result = self.query_df(query, (pwsid,))
+        if not result.empty:
+            return result.iloc[0].to_dict()
+        return None
+    
+    def get_active_alerts(self, pwsid: str) -> dict:
+        """Get active alerts including critical violations and public notifications"""
+        # Get critical active violations
+        critical_violations = self.query_df("""
+            SELECT 
+                v.VIOLATION_CODE,
+                v.VIOLATION_CATEGORY_CODE,
+                r.VALUE_DESCRIPTION as violation_desc,
+                v.IS_HEALTH_BASED_IND,
+                v.NON_COMPL_PER_BEGIN_DATE
+            FROM violations_enforcement v
+            LEFT JOIN ref_code_values r ON v.VIOLATION_CODE = r.VALUE_CODE 
+                AND r.VALUE_TYPE = 'VIOLATION_CODE'
+            WHERE v.PWSID = ?
+                AND v.VIOLATION_STATUS = 'Unaddressed'
+                AND (v.IS_HEALTH_BASED_IND = 'Y' 
+                     OR v.VIOLATION_CODE IN ('01', '02', '03', '04', '11', '12', '21', '22', '23', '24'))
+            ORDER BY v.NON_COMPL_PER_BEGIN_DATE DESC
+        """, (pwsid,))
+        
+        # Get public notifications
+        public_notifications = self.query_df("""
+            SELECT 
+                p.VIOLATION_CODE,
+                r.VALUE_DESCRIPTION as notification_type,
+                p.NON_COMPL_PER_BEGIN_DATE,
+                p.COMPL_PER_END_DATE
+            FROM pn_violation_assoc p
+            LEFT JOIN ref_code_values r ON p.VIOLATION_CODE = r.VALUE_CODE 
+                AND r.VALUE_TYPE = 'VIOLATION_CODE'
+            WHERE p.PWSID = ?
+                AND p.NON_COMPL_PER_END_DATE >= date('now')
+            ORDER BY p.NON_COMPL_PER_BEGIN_DATE DESC
+        """, (pwsid,))
+        
+        # Determine alert level
+        alert_level = 'none'
+        alerts = []
+        
+        # Check for critical violations
+        if not critical_violations.empty:
+            health_violations = critical_violations[critical_violations['IS_HEALTH_BASED_IND'] == 'Y']
+            if not health_violations.empty:
+                alert_level = 'critical'
+                for _, v in health_violations.iterrows():
+                    alerts.append({
+                        'type': 'Health Violation',
+                        'description': v['violation_desc'],
+                        'date': v['NON_COMPL_PER_BEGIN_DATE'],
+                        'severity': 'critical'
+                    })
+            else:
+                alert_level = 'warning'
+                for _, v in critical_violations.iterrows():
+                    alerts.append({
+                        'type': 'Violation',
+                        'description': v['violation_desc'],
+                        'date': v['NON_COMPL_PER_BEGIN_DATE'],
+                        'severity': 'warning'
+                    })
+        
+        # Add public notifications
+        if not public_notifications.empty:
+            if alert_level == 'none':
+                alert_level = 'info'
+            for _, n in public_notifications.iterrows():
+                alerts.append({
+                    'type': 'Public Notice',
+                    'description': n['notification_type'],
+                    'date': n['NON_COMPL_PER_BEGIN_DATE'],
+                    'severity': 'info'
+                })
+        
+        return {
+            'alert_level': alert_level,
+            'alerts': alerts,
+            'critical_count': len([a for a in alerts if a['severity'] == 'critical']),
+            'warning_count': len([a for a in alerts if a['severity'] == 'warning']),
+            'info_count': len([a for a in alerts if a['severity'] == 'info'])
+        }
+    
+    def get_treatment_facilities(self, pwsid: str) -> pd.DataFrame:
+        """Get treatment facilities for a water system"""
+        query = """
+        SELECT 
+            f.FACILITY_ID,
+            f.FACILITY_NAME,
+            f.FACILITY_TYPE_CODE,
+            r.VALUE_DESCRIPTION as facility_type,
+            f.WATER_TYPE_CODE,
+            f.IS_SOURCE_IND,
+            f.IS_SOURCE_TREATED_IND,
+            f.FACILITY_ACTIVITY_CODE
+        FROM facilities f
+        LEFT JOIN ref_code_values r ON f.FACILITY_TYPE_CODE = r.VALUE_CODE 
+            AND r.VALUE_TYPE = 'FACILITY_TYPE_CODE'
+        WHERE f.PWSID = ?
+            AND f.FACILITY_TYPE_CODE IN ('TP', 'WTP', 'CC', 'CH', 'PF', 'ST')
+            AND (f.FACILITY_DEACTIVATION_DATE IS NULL OR f.FACILITY_DEACTIVATION_DATE = '')
+        ORDER BY f.FACILITY_TYPE_CODE
+        """
+        return self.query_df(query, (pwsid,))
     
     def get_reference_codes(self, value_type: str) -> pd.DataFrame:
         """Get reference code descriptions"""
